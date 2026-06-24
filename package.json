@@ -1,0 +1,12 @@
+{
+  "name": "multi-platform-scraper",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "main": "main.js",
+  "scripts": { "start": "node main.js" },
+  "dependencies": {
+    "apify": "^3.2.2",
+    "crawlee": "^3.5.8",
+    "playwright": "^1.43.0"
+  }
+}
