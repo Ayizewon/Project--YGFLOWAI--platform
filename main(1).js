@@ -1,18 +1,15 @@
-// Apify Actor 入口 — 部署到 Apify 平台
-// 输入字段: platforms(array), keyword(string), contentTypes(array), totalCount(number), from(string), to(string)
+// Apify Actor — 使用 PlaywrightCrawler 处理 JS 动态渲染页面
 const { Actor } = require('apify')
-const { CheerioCrawler, RequestQueue } = require('crawlee')
+const { PlaywrightCrawler, RequestQueue } = require('crawlee')
 
-// 各平台搜索URL构造
 const PLATFORM_URL = {
-  zhihu:  (kw) => `https://www.zhihu.com/search?type=content&q=${encodeURIComponent(kw)}`,
-  juejin: (kw) => `https://juejin.cn/search?query=${encodeURIComponent(kw)}&type=0`,
-  csdn:   (kw) => `https://so.csdn.net/so/search?q=${encodeURIComponent(kw)}&t=blog`,
-  weibo:  (kw) => `https://s.weibo.com/weibo?q=${encodeURIComponent(kw)}`,
-  baidu:  (kw) => `https://www.baidu.com/s?wd=${encodeURIComponent(kw)}`,
-  douyin: (kw) => `https://www.douyin.com/search/${encodeURIComponent(kw)}`,
-  weixin: (kw) => `https://weixin.sogou.com/weixin?type=2&query=${encodeURIComponent(kw)}`,
-  // 国际平台（JS渲染，需配合 PlaywrightCrawler 使用）
+  zhihu:     (kw) => `https://www.zhihu.com/search?type=content&q=${encodeURIComponent(kw)}`,
+  juejin:    (kw) => `https://juejin.cn/search?query=${encodeURIComponent(kw)}&type=0`,
+  csdn:      (kw) => `https://so.csdn.net/so/search?q=${encodeURIComponent(kw)}&t=blog`,
+  weibo:     (kw) => `https://s.weibo.com/weibo?q=${encodeURIComponent(kw)}`,
+  baidu:     (kw) => `https://www.baidu.com/s?wd=${encodeURIComponent(kw)}`,
+  douyin:    (kw) => `https://www.douyin.com/search/${encodeURIComponent(kw)}`,
+  weixin:    (kw) => `https://weixin.sogou.com/weixin?type=2&query=${encodeURIComponent(kw)}`,
   facebook:  (kw) => `https://www.facebook.com/search/posts?q=${encodeURIComponent(kw)}`,
   tiktok:    (kw) => `https://www.tiktok.com/search?q=${encodeURIComponent(kw)}`,
   twitter:   (kw) => `https://twitter.com/search?q=${encodeURIComponent(kw)}&src=typed_query&f=live`,
@@ -21,183 +18,143 @@ const PLATFORM_URL = {
   reddit:    (kw) => `https://www.reddit.com/search/?q=${encodeURIComponent(kw)}&sort=new`
 }
 
-// 各平台结果解析
-const PLATFORM_PARSER = {
-  zhihu($ ) {
-    const items = []
-    $('.SearchResult-Card').each((_, el) => {
-      items.push({
-        title:       $(el).find('.ContentItem-title').text().trim(),
-        summary:     $(el).find('.RichText').text().trim().slice(0, 100),
-        author:      $(el).find('.UserLink-link').first().text().trim(),
-        publishTime: $(el).find('.ContentItem-time').text().replace('发布于 ','').trim(),
-        url:         $(el).find('a[data-za-detail-view-element_name="Title"]').attr('href') || ''
-      })
-    })
-    return items
+// 各平台：等待选择器 + page.evaluate 提取数据
+const PLATFORM_EXTRACTOR = {
+  zhihu: {
+    waitFor: '.SearchResult-Card',
+    extract: () => [...document.querySelectorAll('.SearchResult-Card')].map(el => ({
+      title:       el.querySelector('.ContentItem-title')?.textContent.trim() || '',
+      summary:     el.querySelector('.RichText')?.textContent.trim().slice(0, 100) || '',
+      author:      el.querySelector('.UserLink-link')?.textContent.trim() || '',
+      publishTime: el.querySelector('.ContentItem-time')?.textContent.replace('发布于 ','').trim() || '',
+      url:         el.querySelector('a[data-za-detail-view-element_name="Title"]')?.href || ''
+    }))
   },
-  juejin($) {
-    const items = []
-    $('.search-list-box .item').each((_, el) => {
-      items.push({
-        title:       $(el).find('.title').text().trim(),
-        summary:     $(el).find('.brief').text().trim(),
-        author:      $(el).find('.username').text().trim(),
-        publishTime: $(el).find('.time').text().trim(),
-        url:         'https://juejin.cn' + ($(el).find('a.title').attr('href') || '')
-      })
-    })
-    return items
+  juejin: {
+    waitFor: '.search-list-box .item',
+    extract: () => [...document.querySelectorAll('.search-list-box .item')].map(el => ({
+      title:       el.querySelector('.title')?.textContent.trim() || '',
+      summary:     el.querySelector('.brief')?.textContent.trim() || '',
+      author:      el.querySelector('.username')?.textContent.trim() || '',
+      publishTime: el.querySelector('.time')?.textContent.trim() || '',
+      url:         'https://juejin.cn' + (el.querySelector('a.title')?.getAttribute('href') || '')
+    }))
   },
-  csdn($) {
-    const items = []
-    $('#content_list .list-box-cont').each((_, el) => {
-      items.push({
-        title:       $(el).find('.title a').text().trim(),
-        summary:     $(el).find('.content').text().trim().slice(0, 100),
-        author:      $(el).find('.avatar-box span').text().trim(),
-        publishTime: $(el).find('.time').text().trim(),
-        url:         $(el).find('.title a').attr('href') || ''
-      })
-    })
-    return items
+  csdn: {
+    waitFor: '#content_list .list-box-cont',
+    extract: () => [...document.querySelectorAll('#content_list .list-box-cont')].map(el => ({
+      title:       el.querySelector('.title a')?.textContent.trim() || '',
+      summary:     el.querySelector('.content')?.textContent.trim().slice(0, 100) || '',
+      author:      el.querySelector('.avatar-box span')?.textContent.trim() || '',
+      publishTime: el.querySelector('.time')?.textContent.trim() || '',
+      url:         el.querySelector('.title a')?.href || ''
+    }))
   },
-  weibo($) {
-    const items = []
-    $('.card-feed').each((_, el) => {
-      items.push({
-        title:       $(el).find('.txt').text().trim().slice(0, 60),
-        summary:     $(el).find('.txt').text().trim().slice(0, 100),
-        author:      $(el).find('.name').first().text().trim(),
-        publishTime: $(el).find('.from a').first().text().trim(),
-        url:         'https://weibo.com' + ($(el).find('.from a').first().attr('href') || '')
-      })
-    })
-    return items
+  weibo: {
+    waitFor: '.card-feed',
+    extract: () => [...document.querySelectorAll('.card-feed')].map(el => ({
+      title:       el.querySelector('.txt')?.textContent.trim().slice(0, 60) || '',
+      summary:     el.querySelector('.txt')?.textContent.trim().slice(0, 100) || '',
+      author:      el.querySelector('.name')?.textContent.trim() || '',
+      publishTime: el.querySelector('.from a')?.textContent.trim() || '',
+      url:         el.querySelector('.from a')?.href || ''
+    }))
   },
-  weixin($) {
-    const items = []
-    $('.news-box .news-list li').each((_, el) => {
-      items.push({
-        title:       $(el).find('h3').text().trim(),
-        summary:     $(el).find('p').text().trim(),
-        author:      $(el).find('.account').text().trim(),
-        publishTime: $(el).find('.s2').text().trim(),
-        url:         $(el).find('a').attr('href') || ''
-      })
-    })
-    return items
+  weixin: {
+    waitFor: '.news-box .news-list li',
+    extract: () => [...document.querySelectorAll('.news-box .news-list li')].map(el => ({
+      title:       el.querySelector('h3')?.textContent.trim() || '',
+      summary:     el.querySelector('p')?.textContent.trim() || '',
+      author:      el.querySelector('.account')?.textContent.trim() || '',
+      publishTime: el.querySelector('.s2')?.textContent.trim() || '',
+      url:         el.querySelector('a')?.href || ''
+    }))
   },
-  baidu($) {
-    const items = []
-    $('#content_left .result').each((_, el) => {
-      items.push({
-        title:       $(el).find('h3').text().trim(),
-        summary:     $(el).find('.content-right_8Zs40').text().trim().slice(0, 100),
-        author:      $(el).find('.tts-title').text().trim(),
-        publishTime: $(el).find('.newTimeFactor_new_oqdy5').text().trim(),
-        url:         $(el).find('a').attr('href') || ''
-      })
-    })
-    return items
+  baidu: {
+    waitFor: '#content_left .result',
+    extract: () => [...document.querySelectorAll('#content_left .result')].map(el => ({
+      title:       el.querySelector('h3')?.textContent.trim() || '',
+      summary:     el.querySelector('.content-right_8Zs40, .c-abstract')?.textContent.trim().slice(0, 100) || '',
+      author:      el.querySelector('.tts-title, .c-author')?.textContent.trim() || '',
+      publishTime: el.querySelector('.newTimeFactor_new_oqdy5, .c-color-gray')?.textContent.trim() || '',
+      url:         el.querySelector('a')?.href || ''
+    }))
   },
-  douyin($) {
-    const items = []
-    $('[data-e2e="search-video-card"]').each((_, el) => {
-      items.push({
-        title:       $(el).find('[data-e2e="search-card-desc"]').text().trim(),
-        summary:     $(el).find('[data-e2e="search-card-desc"]').text().trim().slice(0, 100),
-        author:      $(el).find('[data-e2e="search-card-author-name"]').text().trim(),
-        publishTime: $(el).find('.videoCard-playCount').text().trim(),
-        url:         ''
-      })
-    })
-    return items
+  douyin: {
+    waitFor: '[data-e2e="search-video-card"]',
+    extract: () => [...document.querySelectorAll('[data-e2e="search-video-card"]')].map(el => ({
+      title:       el.querySelector('[data-e2e="search-card-desc"]')?.textContent.trim() || '',
+      summary:     el.querySelector('[data-e2e="search-card-desc"]')?.textContent.trim().slice(0, 100) || '',
+      author:      el.querySelector('[data-e2e="search-card-author-name"]')?.textContent.trim() || '',
+      publishTime: '',
+      url:         el.querySelector('a')?.href || ''
+    }))
   },
-  // ── 国际平台（JS渲染，建议配合 PlaywrightCrawler） ──
-  facebook($) {
-    const items = []
-    $('[role="article"]').each((_, el) => {
-      items.push({
-        title:       $(el).find('span[dir="auto"]').first().text().trim().slice(0, 60),
-        summary:     $(el).find('span[dir="auto"]').first().text().trim().slice(0, 100),
-        author:      $(el).find('strong a, h3 a').first().text().trim(),
-        publishTime: $(el).find('abbr[data-utime], a[aria-label]').attr('title') || '',
-        url:         $(el).find('a[aria-label]').attr('href') || ''
-      })
-    })
-    return items
+  facebook: {
+    waitFor: '[role="article"]',
+    extract: () => [...document.querySelectorAll('[role="article"]')].map(el => ({
+      title:       el.querySelector('span[dir="auto"]')?.textContent.trim().slice(0, 60) || '',
+      summary:     el.querySelector('span[dir="auto"]')?.textContent.trim().slice(0, 100) || '',
+      author:      el.querySelector('strong a, h3 a')?.textContent.trim() || '',
+      publishTime: el.querySelector('abbr[data-utime]')?.title || '',
+      url:         el.querySelector('a[role="link"]')?.href || ''
+    }))
   },
-  tiktok($) {
-    const items = []
-    $('[data-e2e="search_top-item"]').each((_, el) => {
-      items.push({
-        title:       $(el).find('[data-e2e="search-card-desc"]').text().trim(),
-        summary:     $(el).find('[data-e2e="search-card-desc"]').text().trim().slice(0, 100),
-        author:      $(el).find('[data-e2e="search-card-user-unique-id"]').text().trim(),
-        publishTime: '',
-        url:         $(el).find('a').attr('href') || ''
-      })
-    })
-    return items
+  tiktok: {
+    waitFor: '[data-e2e="search_top-item"]',
+    extract: () => [...document.querySelectorAll('[data-e2e="search_top-item"]')].map(el => ({
+      title:       el.querySelector('[data-e2e="search-card-desc"]')?.textContent.trim() || '',
+      summary:     el.querySelector('[data-e2e="search-card-desc"]')?.textContent.trim().slice(0, 100) || '',
+      author:      el.querySelector('[data-e2e="search-card-user-unique-id"]')?.textContent.trim() || '',
+      publishTime: '',
+      url:         el.querySelector('a')?.href || ''
+    }))
   },
-  twitter($) {
-    const items = []
-    $('article[data-testid="tweet"]').each((_, el) => {
-      items.push({
-        title:       $(el).find('[data-testid="tweetText"]').text().trim().slice(0, 60),
-        summary:     $(el).find('[data-testid="tweetText"]').text().trim().slice(0, 100),
-        author:      $(el).find('[data-testid="User-Name"] span').first().text().trim(),
-        publishTime: $(el).find('time').attr('datetime') || '',
-        url:         'https://twitter.com' + ($(el).find('a[href*="/status/"]').attr('href') || '')
-      })
-    })
-    return items
+  twitter: {
+    waitFor: 'article[data-testid="tweet"]',
+    extract: () => [...document.querySelectorAll('article[data-testid="tweet"]')].map(el => ({
+      title:       el.querySelector('[data-testid="tweetText"]')?.textContent.trim().slice(0, 60) || '',
+      summary:     el.querySelector('[data-testid="tweetText"]')?.textContent.trim().slice(0, 100) || '',
+      author:      el.querySelector('[data-testid="User-Name"] span')?.textContent.trim() || '',
+      publishTime: el.querySelector('time')?.getAttribute('datetime') || '',
+      url:         'https://twitter.com' + (el.querySelector('a[href*="/status/"]')?.getAttribute('href') || '')
+    }))
   },
-  instagram($) {
-    const items = []
-    $('article').each((_, el) => {
-      items.push({
-        title:       $(el).find('img').attr('alt') || '',
-        summary:     $(el).find('img').attr('alt') || '',
-        author:      $(el).find('header a').text().trim(),
-        publishTime: $(el).find('time').attr('datetime') || '',
-        url:         'https://www.instagram.com' + ($(el).find('a[href*="/p/"]').attr('href') || '')
-      })
-    })
-    return items
+  instagram: {
+    waitFor: 'article',
+    extract: () => [...document.querySelectorAll('article')].map(el => ({
+      title:       el.querySelector('img')?.alt || '',
+      summary:     el.querySelector('img')?.alt.slice(0, 100) || '',
+      author:      el.querySelector('header a')?.textContent.trim() || '',
+      publishTime: el.querySelector('time')?.getAttribute('datetime') || '',
+      url:         'https://www.instagram.com' + (el.querySelector('a[href*="/p/"]')?.getAttribute('href') || '')
+    }))
   },
-  youtube($) {
-    const items = []
-    $('ytd-video-renderer, ytd-search-pyv-renderer').each((_, el) => {
-      items.push({
-        title:       $(el).find('#video-title').text().trim(),
-        summary:     $(el).find('#description-text').text().trim(),
-        author:      $(el).find('.ytd-channel-name a').text().trim(),
-        publishTime: $(el).find('#metadata-line span:last-child').text().trim(),
-        url:         'https://www.youtube.com' + ($(el).find('a#video-title').attr('href') || '')
-      })
-    })
-    return items
+  youtube: {
+    waitFor: 'ytd-video-renderer',
+    extract: () => [...document.querySelectorAll('ytd-video-renderer')].map(el => ({
+      title:       el.querySelector('#video-title')?.textContent.trim() || '',
+      summary:     el.querySelector('#description-text')?.textContent.trim() || '',
+      author:      el.querySelector('.ytd-channel-name a')?.textContent.trim() || '',
+      publishTime: el.querySelector('#metadata-line span:last-child')?.textContent.trim() || '',
+      url:         'https://www.youtube.com' + (el.querySelector('a#video-title')?.getAttribute('href') || '')
+    }))
   },
-  reddit($) {
-    const items = []
-    $('div[data-testid="post-container"]').each((_, el) => {
-      items.push({
-        title:       $(el).find('h3').text().trim(),
-        summary:     $(el).find('[data-click-id="body"] p').text().trim().slice(0, 100),
-        author:      $(el).find('[data-testid="post_author_link"]').text().trim(),
-        publishTime: $(el).find('a[data-click-id="timestamp"]').text().trim(),
-        url:         'https://www.reddit.com' + ($(el).find('a[data-click-id="timestamp"]').attr('href') || '')
-      })
-    })
-    return items
+  reddit: {
+    waitFor: '[data-testid="post-container"]',
+    extract: () => [...document.querySelectorAll('[data-testid="post-container"]')].map(el => ({
+      title:       el.querySelector('h3')?.textContent.trim() || '',
+      summary:     el.querySelector('[data-click-id="body"] p')?.textContent.trim().slice(0, 100) || '',
+      author:      el.querySelector('[data-testid="post_author_link"]')?.textContent.trim() || '',
+      publishTime: el.querySelector('a[data-click-id="timestamp"]')?.textContent.trim() || '',
+      url:         'https://www.reddit.com' + (el.querySelector('a[data-click-id="timestamp"]')?.getAttribute('href') || '')
+    }))
   }
 }
 
 Actor.main(async () => {
   const { platforms = [], keyword = '', contentTypes = ['post'], totalCount = 100 } = await Actor.getInput()
-
+  const perPlatform = Math.ceil(totalCount / platforms.length)
   const dataset = await Actor.openDataset()
   const requestQueue = await RequestQueue.open()
 
@@ -206,21 +163,30 @@ Actor.main(async () => {
     if (url) await requestQueue.addRequest({ url, userData: { platform } })
   }
 
-  const crawler = new CheerioCrawler({
+  const crawler = new PlaywrightCrawler({
     requestQueue,
     maxRequestsPerCrawl: platforms.length,
-    async requestHandler({ request, $ }) {
+    launchContext: { launchOptions: { headless: true } },
+    async requestHandler({ page, request }) {
       const { platform } = request.userData
-      const parser = PLATFORM_PARSER[platform]
-      if (!parser) return
-      const items = parser($)
-        .slice(0, Math.ceil(totalCount / platforms.length))
+      const ext = PLATFORM_EXTRACTOR[platform]
+      if (!ext) return
+
+      try {
+        await page.waitForSelector(ext.waitFor, { timeout: 15000 })
+      } catch {
+        // 选择器等待超时，仍尝试提取
+      }
+
+      const items = await page.evaluate(ext.extract)
+      const mapped = items
+        .slice(0, perPlatform)
         .map(item => ({ platform, ...item }))
-        .filter(item => {
-          if (!contentTypes.includes('post') && !contentTypes.includes('comment')) return false
-          return true
-        })
-      await dataset.pushData(items)
+
+      if (mapped.length) await dataset.pushData(mapped)
+    },
+    failedRequestHandler({ request }) {
+      console.error(`Failed: ${request.url}`)
     }
   })
 
